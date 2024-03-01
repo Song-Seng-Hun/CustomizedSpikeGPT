@@ -29,11 +29,8 @@ datafile_encoding = 'utf-8'
 
 ### Step 2: set model size #############################################################################
 
-ctx_len = 1024        # ===> increase T_MAX in model.py if your ctx_len > 1024
-n_layer = 24
-n_embd = 768
+ctx_len = 1024 
 
-# 'RWKV' (better for char-level English) or 'RWKV-ffnPre' (better in some cases)
 model_type = 'RWKV'
 
 ### Step 3: set batch size #############################################################################
@@ -51,7 +48,7 @@ lr_final = 1e-5
 n_epoch = 1000
 # 0 = never, 1 = every mini-epoch, 2 = every two mini-epochs, etc.
 epoch_save_frequency = 10
-epoch_save_path = 'your_path'
+epoch_save_path = 'weights'
 
 epoch_length_fixed = 10000
 
@@ -91,17 +88,14 @@ train_dataset = Dataset(open(
 # Train model
 ########################################################################################################
 if __name__ == '__main__':
-
-    model = GPT(GPTConfig(train_dataset.vocab_size, train_dataset.ctx_len, model_type=model_type,
-                          n_layer=n_layer, n_embd=n_embd)).cuda()
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = GPT(GPTConfig()).to(device)
 
     # # load a trained model. remember to change random seed
 #     m2 = torch.load('medium/trained-30L-768E-936.pth',map_location=torch.device('cpu'))
 #     model.load_state_dict(m2)
     valid_dataset = None
     test_dataset = None
-    print('model', model_type, 'epoch', n_epoch, 'batchsz', batch_size, 'betas',
-          betas, 'eps', eps, 'ctx', ctx_len, 'layer', n_layer, 'embd', n_embd, )
     tconf = TrainerConfig(model_type=model_type, max_epochs=n_epoch, batch_size=batch_size,
                           learning_rate=lr_init, lr_decay=True, lr_final=lr_final, betas=betas, eps=eps, grad_norm_clip=grad_norm_clip,
                           warmup_tokens=warmup_tokens, final_tokens=n_epoch*len(train_dataset)*ctx_len, num_workers=num_workers, epoch_save_frequency=epoch_save_frequency, epoch_save_path=epoch_save_path)

@@ -25,6 +25,7 @@ except:
 
 logger = logging.getLogger(__name__)
 
+CUDA_LAUNCH_BLOCKING=1
 RWKV_HEAD_QK_DIM = 0
 print(f'\nRWKV_HEAD_QK_DIM {RWKV_HEAD_QK_DIM}\n')
 
@@ -50,7 +51,6 @@ class L2Wrap(torch.autograd.Function):
 # CUDA Kernel
 ########################################################################################################
 
-DTYPE = torch.bfloat16
 
 DEVICE = 'cuda'
 CUDA_KERNEL_VERSION = 'v1'
@@ -62,36 +62,7 @@ Self CUDA
 
 CHECK_REF = False
 
-if CHECK_REF:
-    # B = 10
-    # T = 4
-    # C = 4
-    # HEAD_SIZE = 4
-    # H = C // HEAD_SIZE
-
-    B = 2
-    T = 7
-    C = 8
-    HEAD_SIZE = 4
-    H = C // HEAD_SIZE
-
-    # B = 1
-    # T = 3
-    # C = 4
-    # HEAD_SIZE = 4
-    # H = C // HEAD_SIZE
-else:
-    # B = 8
-    # T = 64
-    # C = 64
-    # HEAD_SIZE = 8
-    # H = C // HEAD_SIZE
-
-    B = 8
-    T = 64 # 64 works, but 128 does not work
-    C = 4096
-    HEAD_SIZE = 64
-    H = C // HEAD_SIZE
+HEAD_SIZE = 64
 
 T_MAX = 1024  # increase this if your ctx_len is long [NOTE: TAKES LOTS OF VRAM!]
 # it's possible to go beyond CUDA limitations if you slice the ctx and pass the hidden state in each slice
@@ -100,18 +71,20 @@ from torch.utils.cpp_extension import load
 
 # windows
 wkv6_cuda = load(name="wkv6", sources=["cuda/wkv6_op.cpp", f"cuda/wkv6_cuda_{CUDA_KERNEL_VERSION}.cu"],
-                verbose=True, extra_cuda_cflags=["-allow-unsupported-compiler", "-res-usage", "--use_fast_math", "-O3", "-Xptxas=-O3", "--extra-device-vectorization", f"-D_N_={HEAD_SIZE}", f"-D_T_={T}"])
+                verbose=True, extra_cuda_cflags=["-allow-unsupported-compiler", "-res-usage", "--use_fast_math", "-O3", "-Xptxas=-O3", "--extra-device-vectorization", f"-D_N_={HEAD_SIZE}", f"-D_T_={T_MAX}"])
  
 
 class WKV_6(torch.autograd.Function):
     @staticmethod
     def forward(ctx, B, T, C, H, r, k, v, w, u):
+        DTYPE = torch.bfloat16
         with torch.no_grad():
             r = r.type(DTYPE).contiguous()
             v = v.type(DTYPE).contiguous()
             k = k.type(DTYPE).contiguous()
             w = w.type(DTYPE).contiguous()
             u = u.type(DTYPE).contiguous()
+            print(HEAD_SIZE, C, H)
             assert HEAD_SIZE == C // H
             ctx.B = B
             ctx.T = T
@@ -119,19 +92,20 @@ class WKV_6(torch.autograd.Function):
             ctx.H = H
             ew = (-torch.exp(w.float())).contiguous()
             ctx.save_for_backward(r, k, v, ew, u)
-            y = torch.empty((B, T, C), device=r.device, dtype=DTYPE, memory_format=torch.contiguous_format)#.uniform_(-100, 100)
+            y = torch.empty((B, T, C), device=r.device, dtype=torch.bfloat16, memory_format=torch.contiguous_format)#.uniform_(-100, 100)
             wkv6_cuda.forward(B, T, C, H, r, k, v, ew, u, y)
             return y
 
     @staticmethod
     def backward(ctx, gy):
+        DTYPE = torch.bfloat16
         with torch.no_grad():
             assert gy.dtype == DTYPE
             B = ctx.B
             T = ctx.T
             C = ctx.C
             H = ctx.H
-            assert gy.is_contiguous()
+            gy = gy.contiguous()
             r, k, v, ew, u = ctx.saved_tensors
             gr = torch.empty((B, T, C), device=gy.device, requires_grad=False, dtype=DTYPE, memory_format=torch.contiguous_format)#.uniform_(-100, 100)
             gk = torch.empty((B, T, C), device=gy.device, requires_grad=False, dtype=DTYPE, memory_format=torch.contiguous_format)#.uniform_(-100, 100)
@@ -290,7 +264,7 @@ class RWKV_Tmix_x060(torch.jit.ScriptModule):
     def jit_func_2(self, x, g):
         B, T, C = x.size()
         x = x.view(B * T, C)
-        
+        x = x.type(torch.bfloat16)
         x = self.ln_x(x).view(B, T, C)
         x = self.output(x * g)
         return x
@@ -303,6 +277,7 @@ class RWKV_Tmix_x060(torch.jit.ScriptModule):
         x = RUN_CUDA_RWKV6(B, T, C, H, r, k, v, w, u=self.time_faaaa)
 
         return self.jit_func_2(x, g)
+    
 
 class RWKV_ChannelMix(torch.jit.ScriptModule):
     def __init__(self, args, layer_id):
@@ -368,7 +343,7 @@ class RWKV_CMix_x060(torch.jit.ScriptModule):
 ########################################################################################################
 
 class GPTConfig:
-    def __init__(self, vocab_size=50277, ctx_len=1024, n_layer=24, n_embd=512, my_pos_emb=0, head_size_a=64, model_type='RWKV', pre_ffn=0, dim_ffn=0, dim_att=512, head_size_divisor=8, tiny_att_dim=0, tiny_att_layer=-999, dropout=0.5, **kwargs):
+    def __init__(self, vocab_size=50277, ctx_len=1024, n_layer=12, n_embd=512, my_pos_emb=0, head_size_a=HEAD_SIZE, model_type='RWKV', pre_ffn=0, dim_ffn=0, dim_att=512, head_size_divisor=8, tiny_att_dim=0, tiny_att_layer=-999, dropout=0.5, **kwargs):
         self.vocab_size = vocab_size
         self.ctx_len = ctx_len
         self.n_layer = n_layer

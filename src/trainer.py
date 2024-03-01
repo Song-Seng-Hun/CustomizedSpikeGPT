@@ -2,6 +2,8 @@
 # The RWKV v2-RNN Language Model - https://github.com/BlinkDL/RWKV-LM
 ########################################################################################################
 
+import sys, os
+sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
 from torch.utils.data.dataloader import DataLoader
 from torch.optim.lr_scheduler import LambdaLR
 from torch.nn import functional as F
@@ -12,9 +14,7 @@ from tqdm.auto import tqdm
 import numpy as np
 import logging
 from src.spikingjelly.clock_driven import functional
-import os
 import datetime
-import sys
 import math
 import pdb
 from accelerate import Accelerator
@@ -73,7 +73,7 @@ class Trainer:
 
         self.device = 'cpu'
         if torch.cuda.is_available():  # take over whatever gpus are on the system
-            self.device = torch.cuda.current_device()
+            self.device = 'cuda'
 
     def get_run_name(self):
         raw_model = self.model.module if hasattr(
@@ -100,11 +100,11 @@ class Trainer:
             if config.num_workers > 0:
                 loader = DataLoader(data, shuffle=False, pin_memory=True,
                                     batch_size=config.batch_size,
-                                    num_workers=config.num_workers)
+                                    num_workers=config.num_workers, drop_last=True)
             else:
                 loader = DataLoader(data, shuffle=False,
                                     batch_size=config.batch_size,
-                                    num_workers=config.num_workers)
+                                    num_workers=config.num_workers, drop_last=True)
 
             loader = accelerator.prepare(loader)
             pbar = tqdm(enumerate(loader), total=len(
@@ -115,12 +115,13 @@ class Trainer:
             dev_loss_all = 0
 
             for it, (x, y) in pbar:
-                # x = x.to(self.device)  # place data on the correct device
-                # y = y.to(self.device)
+                x = x.to(self.device)  # place data on the correct device
+                y = y.to(self.device)
 
                 with torch.set_grad_enabled(is_train):
-                    loss = model(x, y)  # forward the model
-                    functional.reset_net(model)
+                    with torch.autocast(device_type="cuda"):
+                        loss = model(x, y)  # forward the model
+                        functional.reset_net(model)
 
                 if is_train:  # backprop and update the parameters
                     model.zero_grad()

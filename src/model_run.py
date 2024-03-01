@@ -1,7 +1,8 @@
-
+import sys, os
+sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
 import types
 import torch
-import math, os, gc
+import math, gc
 from torch.nn import functional as F
 import torch.nn as nn
 from typing import List, Dict
@@ -218,8 +219,6 @@ class RWKV_RNN(MyModule):
                     mem1.append(neuron.LIFNode())
                     mem2.append(neuron.LIFNode())
                     
-            
-
             for i in range(args.n_layer):
                 if i == 0:
                     x = self.LN(x, w.blocks[i].ln0)

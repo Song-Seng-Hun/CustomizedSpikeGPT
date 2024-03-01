@@ -343,7 +343,7 @@ class RWKV_CMix_x060(torch.jit.ScriptModule):
 ########################################################################################################
 
 class GPTConfig:
-    def __init__(self, vocab_size=50277, ctx_len=1024, n_layer=12, n_embd=512, my_pos_emb=0, head_size_a=HEAD_SIZE, model_type='RWKV', pre_ffn=0, dim_ffn=0, dim_att=512, head_size_divisor=8, tiny_att_dim=0, tiny_att_layer=-999, dropout=0.5, **kwargs):
+    def __init__(self, vocab_size=50277, ctx_len=1024, n_layer=12, n_embd=512, my_pos_emb=0, head_size_a=HEAD_SIZE, model_type='RWKV', pre_ffn=0, dim_ffn=0, dim_att=512, head_size_divisor=8, tiny_att_dim=0, tiny_att_layer=-999, dropout=0, **kwargs):
         self.vocab_size = vocab_size
         self.ctx_len = ctx_len
         self.n_layer = n_layer
@@ -426,7 +426,8 @@ class Block(nn.Module):
         if args.dropout > 0:
             self.drop0 = nn.Dropout(p = args.dropout)
             self.drop1 = nn.Dropout(p = args.dropout)
-        
+    
+    @torch.autocast(device_type="cuda")
     def forward(self, x, x_emb=None):
         args = self.args
         B, T, C = x.size()
@@ -439,16 +440,16 @@ class Block(nn.Module):
         if self.args.dropout == 0:
             if self.layer_id == 0 and args.pre_ffn > 0:
                 # 잘 안되면 permute 제거
-                x = x + self.lif1(self.ffnPre(self.ln1(x)).permute(1, 0, 2)).permute(1, 0, 2)
+                x = x + self.lif1(self.ffnPre(self.ln1(x)))
             else:
-                x = x + self.lif1(self.att(self.ln1(x)).permute(1, 0, 2)).permute(1, 0, 2)
-            x = x + self.lif2(self.ffn(self.ln2(x)).permute(1, 0, 2)).permute(1, 0, 2)
+                x = x + self.lif1(self.att(self.ln1(x)))
+            x = x + self.lif2(self.ffn(self.ln2(x)))
         else:
             if self.layer_id == 0 and args.pre_ffn > 0:
-                x = self.drop0(x + self.ffnPre(self.ln1(x)))
+                x = self.drop0(x + self.lif1(self.ffnPre(self.ln1(x))))
             else:
-                x = self.drop0(x + self.att(self.ln1(x)))
-            x = self.drop1(x + self.ffn(self.ln2(x)))
+                x = self.drop0(x + self.lif1(self.att(self.ln1(x))))
+            x = self.drop1(x + self.lif2(self.ffn(self.ln2(x))))
 
         if args.tiny_att_dim > 0 and self.layer_id == args.tiny_att_layer:
             xx = self.tiny_ln(x)
@@ -527,7 +528,8 @@ class GPT(nn.Module):
                                          eps=train_config.eps)
 
         return optimizer
-
+    
+    @torch.autocast(device_type="cuda")
     def forward(self, idx, targets=None):
         idx = idx.to(self.emb.weight.device)
 
@@ -557,5 +559,5 @@ class GPT(nn.Module):
 
 if __name__ == '__main__':
     gpt_config = GPTConfig()
-    gpt = GPT(config=gpt_config)
-    gpt(torch.tensor([3]).unsqueeze(0))
+    gpt = GPT(config=gpt_config).to('cuda')
+    gpt(torch.tensor([3]).unsqueeze(0).to('cuda'))

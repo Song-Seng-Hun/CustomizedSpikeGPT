@@ -1,9 +1,10 @@
 ########################################################################################################
 # The RWKV Language Model - https://github.com/BlinkDL/RWKV-LM
 ########################################################################################################
-
+import sys, os
+sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
 import numpy as np
-import math, os, sys, types, time, gc
+import math, types, time, gc
 import torch
 from src.utils import TOKENIZER
 import matplotlib.ticker as ticker
@@ -23,20 +24,20 @@ args = types.SimpleNamespace()
 ########################################################################################################
 
 args.RUN_DEVICE = "cuda" # 'cuda' // 'cpu' (already fast)
-args.FLOAT_MODE = "fp32" # fp16 (good for GPU, does not work for CPU) // fp32 (good for CPU) // bf16 (less accurate, but works for CPU)
+args.FLOAT_MODE = "bf16" # fp16 (good for GPU, does not work for CPU) // fp32 (good for CPU) // bf16 (less accurate, but works for CPU)
 
 # if args.RUN_DEVICE == "cuda":
 #     os.environ["RWKV_RUN_BACKEND"] = 'nvfuser' # !!!BUGGY!!! wrong output
 os.environ["RWKV_JIT_ON"] = '1' # '1' or '0'. very useful for GPU/CPU fp32, but might be harmful for GPU fp16. please benchmark !!!
 
 #For BookCorpus Pre-trained model
-# TOKEN_MODE = "char"
+TOKEN_MODE = "char"
 # WORD_NAME = "vocab_book"
 # UNKNOWN_CHAR = ' '
 # vocab_size = 77
 
 #For 216M OpenWebText Pre-trained model
-TOKEN_MODE = "pile"
+# TOKEN_MODE = "pile"
 WORD_NAME = [
     "20B_tokenizer.json",
     "20B_tokenizer.json",
@@ -109,7 +110,7 @@ context = 'Prehistoric man sketched an incredible array of prehistoric beasts on
 
 # User:''' # type your question here
 
-NUM_TRIALS = 999
+NUM_TRIALS = 1
 LENGTH_PER_TRIAL = 333
 
 TEMPERATURE = 1.5
@@ -170,6 +171,8 @@ mem1 = None
 mem2 = None
 out = None
 
+
+## 반복 
 for TRIAL in range(1 if DEBUG_DEBUG else NUM_TRIALS):
     print(("-" * 50) + '\n' + context, end="")
 
@@ -186,7 +189,6 @@ for TRIAL in range(1 if DEBUG_DEBUG else NUM_TRIALS):
         gc.collect()
         torch.cuda.empty_cache()
 
-    record_time('preprocess')
     out_last = src_len
     for i in range(src_len, src_len + (1 if DEBUG_DEBUG else LENGTH_PER_TRIAL)):
         x = ctx[: i + 1]
@@ -221,11 +223,3 @@ for TRIAL in range(1 if DEBUG_DEBUG else NUM_TRIALS):
             if '\ufffd' not in char: # is valid utf8 string?
                 print(char, end="", flush=True)
                 out_last = i+1
-
-    record_time('total')
-    # print(f'\n\n{time_slot}\n\n')
-    print(
-        f"\n\n--- preprocess {round(time_slot['preprocess'], 2)}s, generation {round(time_slot['total']-time_slot['preprocess'], 2)}s ", end = ''
-    )
-
-print(("-" * 50) + '\n')

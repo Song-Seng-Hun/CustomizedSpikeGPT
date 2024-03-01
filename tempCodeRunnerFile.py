@@ -1,0 +1,1 @@
+MODEL_NAME = 'SpikeGPT-216M'

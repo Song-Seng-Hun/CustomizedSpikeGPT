@@ -1,7 +1,8 @@
 ########################################################################################################
 # The RWKV v2-RNN Language Model - https://github.com/BlinkDL/RWKV-LM
 ########################################################################################################
-
+import sys, os
+sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
 import logging
 import datetime
 import json
@@ -16,13 +17,13 @@ from accelerate import accelerator
 torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.allow_tf32 = True
 torch.backends.cuda.matmul.allow_tf32 = True
-
+np.set_printoptions(precision=4, suppress=True, linewidth=200)
 
 ### Step 1: set training data ##########################################################################
 
-datafile_train = "enwik8" # txt file or binidx file
-datafile_valid = "valid.txt"
-datafile_test = "test.txt"
+datafile_train = "enwik8_split/train.txt" # txt file or binidx file
+datafile_valid = "enwik8_split/valid.txt"
+datafile_test = "enwik8_split/test.txt"
 datafile_encoding = 'utf-8'
 # datafile_encoding = 'utf-16le'
 

@@ -28,25 +28,6 @@ logger = logging.getLogger(__name__)
 CUDA_LAUNCH_BLOCKING=1
 RWKV_HEAD_QK_DIM = 0
 print(f'\nRWKV_HEAD_QK_DIM {RWKV_HEAD_QK_DIM}\n')
-    
-class L2Wrap(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, loss, y):
-        ctx.save_for_backward(y)
-        print(f"loss:{loss}")
-        return loss
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        y = ctx.saved_tensors[0]
-        # to encourage the logits to be close to 0
-        factor = 1e-4 / (y.shape[0] * y.shape[1])
-        maxx, ids = torch.max(y, -1, keepdim=True)
-        print(f"\nctx: {ctx}, \nmaxx:{maxx}, \nids: {ids}, \nfactor: {factor}")
-        gy = torch.zeros_like(y)
-        gy.scatter_(-1, ids, maxx * factor)
-        print(f"\ngrad_output: {grad_output}, \ngy: {gy}")
-        return (grad_output, gy)
 
 def __nop(ob):
     return ob
@@ -55,6 +36,23 @@ MyModule = nn.Module
 MyFunction = __nop
 MyModule = torch.jit.ScriptModule
 MyFunction = torch.jit.script_method
+    
+class L2Wrap(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, loss, y):
+        ctx.save_for_backward(y)
+        return loss
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        y = ctx.saved_tensors[0]
+        # to encourage the logits to be close to 0
+        factor = 1e-4 / (y.shape[0] * y.shape[1])
+        maxx, ids = torch.max(y, -1, keepdim=True)
+        gy = torch.zeros_like(y)
+        gy.scatter_(-1, ids, maxx * factor)
+        return (grad_output, gy)
+
 
 ########################################################################################################
 # CUDA Kernel
@@ -79,21 +77,21 @@ T_MAX = 1024  # increase this if your ctx_len is long [NOTE: TAKES LOTS OF VRAM!
 from torch.utils.cpp_extension import load
 
 # windows
-wkv6_cuda = load(name="wkv6", sources=["cuda/wkv6_op.cpp", f"cuda/wkv6_cuda.cu"],
+wkv6_cuda = load(name="wkv6", sources=["cuda/wkv6_op.cpp", f"cuda/wkv6_cuda_{CUDA_KERNEL_VERSION}.cu"],
                 verbose=True, extra_cuda_cflags=["-allow-unsupported-compiler", "-res-usage", "--use_fast_math", "-O3", "-Xptxas=-O3", "--extra-device-vectorization", f"-D_N_={HEAD_SIZE}", f"-D_T_={T_MAX}"])
  
 
 class WKV_6(torch.autograd.Function):
     @staticmethod
     def forward(ctx, B, T, C, H, r, k, v, w, u):
-        DTYPE = torch.float16
+        DTYPE = torch.bfloat16
         with torch.no_grad():
             r = r.type(DTYPE).contiguous()
             v = v.type(DTYPE).contiguous()
             k = k.type(DTYPE).contiguous()
             w = w.type(DTYPE).contiguous()
             u = u.type(DTYPE).contiguous()
-            print(HEAD_SIZE, C, H)
+
             assert HEAD_SIZE == C // H
             ctx.B = B
             ctx.T = T
@@ -101,13 +99,13 @@ class WKV_6(torch.autograd.Function):
             ctx.H = H
             ew = (-torch.exp(w.float())).contiguous()
             ctx.save_for_backward(r, k, v, ew, u)
-            y = torch.empty((B, T, C), device=r.device, dtype=DTYPE, memory_format=torch.contiguous_format)#.uniform_(-100, 100)
+            y = torch.empty((B, T, C), device=r.device, dtype=torch.bfloat16, memory_format=torch.contiguous_format)#.uniform_(-100, 100)
             wkv6_cuda.forward(B, T, C, H, r, k, v, ew, u, y)
             return y
 
     @staticmethod
     def backward(ctx, gy):
-        DTYPE = torch.float16
+        DTYPE = torch.bfloat16
         with torch.no_grad():
             assert gy.dtype == DTYPE
             B = ctx.B
@@ -240,7 +238,7 @@ class RWKV_Tmix_x060(torch.jit.ScriptModule):
         self.value = nn.Linear(args.n_embd, args.dim_att, bias=False)
         self.output = nn.Linear(args.dim_att, args.n_embd, bias=False)
         self.gate = nn.Linear(args.n_embd, args.dim_att, bias=False)
-        self.ln_x = nn.GroupNorm(self.n_head, args.dim_att, eps=(1e-5)*(args.head_size_divisor**2), dtype=torch.float16)
+        self.ln_x = nn.GroupNorm(self.n_head, args.dim_att, eps=(1e-5)*(args.head_size_divisor**2))
 
     @torch.jit.script_method
     def jit_func(self, x):
@@ -273,6 +271,7 @@ class RWKV_Tmix_x060(torch.jit.ScriptModule):
     def jit_func_2(self, x, g):
         B, T, C = x.size()
         x = x.view(B * T, C)
+        x = x.type(torch.bfloat16)
         x = self.ln_x(x).view(B, T, C)
         x = self.output(x * g)
         return x
@@ -351,7 +350,7 @@ class RWKV_CMix_x060(torch.jit.ScriptModule):
 ########################################################################################################
 
 class GPTConfig:
-    def __init__(self, vocab_size=50277, ctx_len=1024, n_layer=3, n_embd=512, my_pos_emb=100, head_size_a=HEAD_SIZE, model_type='RWKV', pre_ffn=0, dim_ffn=2048, dim_att=512, head_size_divisor=8, tiny_att_dim=0, tiny_att_layer=-999, dropout=0, **kwargs):
+    def __init__(self, vocab_size=50277, ctx_len=1024, n_layer=12, n_embd=512, my_pos_emb=100, head_size_a=HEAD_SIZE, model_type='RWKV', pre_ffn=0, dim_ffn=2048, dim_att=512, tiny_att_dim=0, tiny_att_layer=-999, dropout=0, **kwargs):
         self.vocab_size = vocab_size
         self.ctx_len = ctx_len
         self.n_layer = n_layer
@@ -362,7 +361,7 @@ class GPTConfig:
         self.pre_ffn = pre_ffn
         self.head_size_a = head_size_a
         self.dim_att=dim_att
-        self.head_size_divisor = head_size_divisor
+        self.head_size_divisor = dim_att//head_size_a
         self.tiny_att_dim = tiny_att_dim
         self.tiny_att_layer = tiny_att_layer
         self.dropout = dropout
@@ -404,21 +403,18 @@ class Block(nn.Module):
         super().__init__()
         self.args = args
         self.layer_id = layer_id
-        self.adapter0 = nn.Linear(args.n_embd, args.n_embd, bias=False, dtype=torch.float16)
-        self.adapter1 = nn.Linear(args.n_embd, args.n_embd, bias=False, dtype=torch.float16)
-        self.adapter2 = nn.Linear(args.n_embd, args.n_embd, bias=False, dtype=torch.float16)
-        self.ln1 = nn.LayerNorm(args.n_embd, dtype=torch.float16)
-        self.ln2 = nn.LayerNorm(args.n_embd, dtype=torch.float16)
+        self.ln1 = nn.LayerNorm(args.n_embd)
+        self.ln2 = nn.LayerNorm(args.n_embd)
         self.lif1 = neuron.MultiStepLIFNode(tau=2., surrogate_function=surrogate.ATan(alpha=2.0), backend='cupy',
                                             v_threshold=1.)
         self.lif2 = neuron.MultiStepLIFNode(tau=2., surrogate_function=surrogate.ATan(alpha=2.0), backend='cupy',
                                             v_threshold=1.)
 
         if self.layer_id == 0:
-            self.ln0 = nn.LayerNorm(args.n_embd, dtype=torch.float16)
+            self.ln0 = nn.LayerNorm(args.n_embd)
             if args.my_pos_emb > 0:
-                self.pos_emb_x = nn.Parameter(torch.zeros((1,args.my_pos_emb,args.n_embd)))
-                self.pos_emb_y = nn.Parameter(torch.zeros((args.my_pos_emb,1,args.n_embd)))
+                self.pos_emb_x = nn.Parameter(torch.cos(torch.linspace(0, 2*torch.pi, args.my_pos_emb)).unsqueeze(0).unsqueeze(2).repeat(1, 1, args.n_embd)) # (1, args.my_pos_emb, args.n_embd)
+                self.pos_emb_y = nn.Parameter(torch.cos(torch.linspace(0, 2*torch.pi, args.my_pos_emb)).unsqueeze(1).unsqueeze(2).repeat(1, 1, args.n_embd)) # (args.my_pos_emb, 1, args.n_embd)
 
         if self.layer_id == 0 and self.args.pre_ffn > 0:
             self.ffnPre = RWKV_ChannelMix(args, 0)
@@ -427,7 +423,7 @@ class Block(nn.Module):
             self.ffn = RWKV_CMix_x060(args, layer_id)
         
         if args.tiny_att_dim > 0 and self.layer_id == args.tiny_att_layer:
-            self.tiny_ln = nn.LayerNorm(args.n_embd, dtype=torch.float16)
+            self.tiny_ln = nn.LayerNorm(args.n_embd)
             self.tiny_q = nn.Linear(args.n_embd, args.tiny_att_dim, bias=False)
             self.tiny_k = nn.Linear(args.n_embd, args.tiny_att_dim, bias=False)
             self.tiny_v = nn.Linear(args.n_embd, args.n_embd, bias=False)
@@ -437,23 +433,16 @@ class Block(nn.Module):
             self.drop0 = nn.Dropout(p = args.dropout)
             self.drop1 = nn.Dropout(p = args.dropout)
     
+    @torch.autocast(device_type="cuda")
     def forward(self, x, x_emb=None):
         args = self.args
         B, T, C = x.size()
-
-        residual = x
-        x = self.adapter0(x)
-        x = x + residual
-
+        
         if self.layer_id == 0:
             x = self.ln0(x)
             if args.my_pos_emb > 0:
                 pos_emb = (self.pos_emb_x + self.pos_emb_y).reshape(T+1, -1)[:-1,:args.n_embd]
                 x = x + pos_emb
-
-        residual = x
-        x = self.adapter1(x)
-        x = x + residual
 
         if self.args.dropout == 0:
             if self.layer_id == 0 and args.pre_ffn > 0:
@@ -461,22 +450,13 @@ class Block(nn.Module):
             else:
                 x = x + self.lif1(self.att(self.ln1(x)).permute(1, 0, 2)).permute(1, 0, 2)
 
-            residual = x
-            x = self.adapter2(x)
-            x = x + residual
-
             x = x + self.lif2(self.ffn(self.ln2(x)).permute(1, 0, 2)).permute(1, 0, 2)
-       
         else:
             if self.layer_id == 0 and args.pre_ffn > 0:
                 x = self.drop0(x + self.lif1(self.ffnPre(self.ln1(x)).permute(1, 0, 2)).permute(1, 0, 2))
             else:
                 x = self.drop0(x + self.lif1(self.att(self.ln1(x)).permute(1, 0, 2)).permute(1, 0, 2))
 
-            residual = x
-            x = self.adapter2(x)
-            x = x + residual
-            
             x = self.drop1(x + self.lif2(self.ffn(self.ln2(x)).permute(1, 0, 2)).permute(1, 0, 2))
 
         if args.tiny_att_dim > 0 and self.layer_id == args.tiny_att_layer:
@@ -486,14 +466,11 @@ class Block(nn.Module):
             c = (q @ k.transpose(-2, -1)) * (args.tiny_att_dim ** (-0.5))
             c = c.masked_fill(self.tiny_mask[:T, :T] == 0, 0)
             x = x + c @ self.tiny_v(x_emb)
-
         return x
-    
     
 class GPT(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.step = 0
         self.config = config
 
         self.emb = nn.Embedding(config.vocab_size, config.n_embd)
@@ -559,17 +536,18 @@ class GPT(nn.Module):
 
         return optimizer
     
+    @torch.autocast(device_type="cuda")
     def forward(self, idx, targets=None):
         idx = idx.to(self.emb.weight.device)
-
-        self.step += 1
         B, T = idx.size()
         assert T <= self.ctx_len, "Cannot forward, because len(input) > model ctx_len."
         x = self.emb(idx)
-        x = x.to(torch.float16)
+
+        print(f"1:{x.shape}") # b, t, n_embed
         x = self.atan(x)
         x = self.blocks(x)
         x = self.ln_out(x)
+        print(f"2:{x.shape}") # b, t, n_embed
 
         if RWKV_HEAD_QK_DIM > 0:
             q = self.head_q(x)[:, :T, :]
@@ -580,11 +558,11 @@ class GPT(nn.Module):
             x = self.head(x) + c
         else:
             x = self.head(x)
-
+        print(f"3:{x.shape}") # b, t, vocab_size
         loss = None
         if targets is not None:
             loss = F.cross_entropy(x.view(-1, x.size(-1)), targets.to(x.device).view(-1))
-            print(f"loss: {loss}, x: {x}")
+
         return L2Wrap.apply(loss, x)
 
 if __name__ == '__main__':
@@ -595,4 +573,3 @@ if __name__ == '__main__':
     print(loss)
     if loss is not None:
         loss.backward()
-    

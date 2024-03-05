@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include "ATen/ATen.h"
-typedef at::Half f16;
+typedef at::BFloat16 bbf16;
 
 template <typename F>
 __global__ void kernel_forward(const int B, const int T, const int C, const int H,
@@ -187,14 +187,14 @@ __global__ void kernel_backward(const int B, const int T, const int C, const int
     }
 }
 
-void cuda_forward(int B, int T, int C, int H, f16 *r, f16 *k, f16 *v, float *w, f16 *u, f16 *y)
+void cuda_forward(int B, int T, int C, int H, bf16 *r, bf16 *k, bf16 *v, float *w, bf16 *u, bf16 *y)
 {
     assert(H*_N_ == C);
     assert(_N_%4 == 0);
     kernel_forward<<<dim3(B * H), dim3(_N_)>>>(B, T, C, H, r, k, v, w, u, y);
 }
 
-void cuda_backward(int B, int T, int C, int H, f16 *r, f16 *k, f16 *v, float *w, float *ww, f16 *u, f16 *gy, f16 *gr, f16 *gk, f16 *gv, f16 *gw, f16 *gu)
+void cuda_backward(int B, int T, int C, int H, bf16 *r, bf16 *k, bf16 *v, float *w, float *ww, bf16 *u, bf16 *gy, bf16 *gr, bf16 *gk, bf16 *gv, bf16 *gw, bf16 *gu)
 {
     assert(H*_N_ == C);
     assert(_N_%4 == 0);

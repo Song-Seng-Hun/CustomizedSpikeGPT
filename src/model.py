@@ -433,7 +433,7 @@ class Block(nn.Module):
             self.drop0 = nn.Dropout(p = args.dropout)
             self.drop1 = nn.Dropout(p = args.dropout)
     
-    @torch.cuda.amp.autocast
+    @torch.cuda.amp.autocast()
     def forward(self, x, x_emb=None):
         args = self.args
         B, T, C = x.size()
@@ -536,7 +536,7 @@ class GPT(nn.Module):
 
         return optimizer
     
-    @torch.cuda.amp.autocast
+    @torch.cuda.amp.autocast()
     def forward(self, idx, targets=None):
         idx = idx.to(self.emb.weight.device)
         B, T = idx.size()

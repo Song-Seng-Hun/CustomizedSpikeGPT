@@ -119,7 +119,7 @@ class Trainer:
                 y = y.to(self.device)
 
                 with torch.set_grad_enabled(is_train):
-                    with torch.autocast(device_type="cuda"):
+                    with torch.cuda.amp.autocast():
                         loss = model(x, y)  # forward the model
                         functional.reset_net(model)
 

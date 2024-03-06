@@ -8,3 +8,4 @@ ninja
 accelerate
 transformers
 datasets
+transformers[deepspeed]

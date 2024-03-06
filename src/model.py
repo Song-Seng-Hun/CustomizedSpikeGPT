@@ -350,7 +350,7 @@ class RWKV_CMix_x060(torch.jit.ScriptModule):
 ########################################################################################################
 
 class GPTConfig:
-    def __init__(self, vocab_size=50277, ctx_len=1024, n_layer=12, n_embd=512, my_pos_emb=100, head_size_a=HEAD_SIZE, model_type='RWKV', pre_ffn=0, dim_ffn=2048, dim_att=512, tiny_att_dim=0, tiny_att_layer=-999, dropout=0, **kwargs):
+    def __init__(self, vocab_size=50277, ctx_len=1024, n_layer=12, n_embd=512, my_pos_emb=100, head_size_a=HEAD_SIZE, model_type='RWKV', pre_ffn=0, dim_ffn=512, dim_att=512, tiny_att_dim=0, tiny_att_layer=-999, dropout=0, **kwargs):
         self.vocab_size = vocab_size
         self.ctx_len = ctx_len
         self.n_layer = n_layer
@@ -441,7 +441,7 @@ class Block(nn.Module):
         if self.layer_id == 0:
             x = self.ln0(x)
             if args.my_pos_emb > 0:
-                pos_emb = (self.pos_emb_x + self.pos_emb_y).reshape(T+1, -1)[:-1,:args.n_embd]
+                pos_emb = (self.pos_emb_x + self.pos_emb_y).reshape(T_MAX, -1)[:T,:args.n_embd]
                 x = x + pos_emb
 
         if self.args.dropout == 0:

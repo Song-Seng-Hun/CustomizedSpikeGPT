@@ -124,15 +124,15 @@ class Trainer:
                         functional.reset_net(model)
 
                 if is_train:  # backprop and update the parameters
-                    if torch.isfinite(loss):
+                    if loss.isnan.sum() == 0:
                         model.zero_grad()
                         # loss.backward()
                         accelerator.backward(loss)
 
-                        if config.grad_norm_clip > 0:
-                            torch.nn.utils.clip_grad_norm_(
-                                model.parameters(), config.grad_norm_clip)
-
+                    if config.grad_norm_clip > 0:
+                        torch.nn.utils.clip_grad_norm_(
+                            model.parameters(), config.grad_norm_clip)
+                    if loss.isnan.sum() == 0:
                         optimizer.step()
 
                     if config.lr_decay:  # decay the learning rate based on our progress
